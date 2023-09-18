@@ -1,6 +1,7 @@
 package e2e_test
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,7 +22,7 @@ func TestE2E(t *testing.T) {
 	t.Run("database", func(t *testing.T) {
 		t.Parallel()
 
-		req, err := http.NewRequest("GET", fmt.Sprintf("%s/database", endpoint), nil)
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, fmt.Sprintf("%s/database", endpoint), nil)
 		if err != nil {
 			t.Fatalf("failed to create request: %v", err)
 		}
@@ -46,7 +47,7 @@ func TestE2E(t *testing.T) {
 	t.Run("cache", func(t *testing.T) {
 		t.Parallel()
 
-		req, err := http.NewRequest("GET", fmt.Sprintf("%s/cache", endpoint), nil)
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, fmt.Sprintf("%s/cache", endpoint), nil)
 		if err != nil {
 			t.Fatalf("failed to create request: %v", err)
 		}

@@ -140,66 +140,53 @@ func (c *clusterClient) refresh() (err error) {
 type clusterslots struct {
 	reply RedisResult
 	addr  string
+	ver   int
+}
+
+func (s clusterslots) parse(tls bool) map[string]group {
+	if s.ver < 7 {
+		return parseSlots(s.reply.val, s.addr)
+	}
+	return parseShards(s.reply.val, s.addr, tls)
+}
+
+func getClusterSlots(c conn) clusterslots {
+	if c.Version() < 7 {
+		return clusterslots{reply: c.Do(context.Background(), cmds.SlotCmd), addr: c.Addr(), ver: c.Version()}
+	}
+	return clusterslots{reply: c.Do(context.Background(), cmds.ShardsCmd), addr: c.Addr(), ver: c.Version()}
 }
 
 func (c *clusterClient) _refresh() (err error) {
-	type versionedResult struct {
-		version int
-		reply   RedisResult
-		addr    string
-	}
-	var (
-		reply   RedisMessage
-		addr    string
-		version int
-	)
 	c.mu.RLock()
-	results := make(chan versionedResult, len(c.conns))
+	results := make(chan clusterslots, len(c.conns))
 	pending := make([]conn, 0, len(c.conns))
 	for _, cc := range c.conns {
 		pending = append(pending, cc)
 	}
 	c.mu.RUnlock()
 
+	var result clusterslots
 	for i := 0; i < cap(results); i++ {
 		if i&3 == 0 { // batch CLUSTER SLOTS/CLUSTER SHARDS for every 4 connections
 			for j := i; j < i+4 && j < len(pending); j++ {
 				go func(c conn) {
-					var reply RedisResult
-					if c.Version() < 7 {
-						reply = c.Do(context.Background(), cmds.SlotCmd)
-					} else {
-						reply = c.Do(context.Background(), cmds.ShardsCmd)
-					}
-					results <- versionedResult{
-						version: c.Version(),
-						reply:   reply,
-						addr:    c.Addr(),
-					}
+					results <- getClusterSlots(c)
 				}(pending[j])
 			}
 		}
-		r := <-results
-		version = r.version
-		addr = r.addr
-		reply, err = r.reply.ToMessage()
-		if len(reply.values) != 0 {
+		result = <-results
+		err = result.reply.Error()
+		if len(result.reply.val.values) != 0 {
 			break
 		}
 	}
-	pending = nil
-
 	if err != nil {
 		return err
 	}
+	pending = nil
 
-	var groups map[string]group
-	if version < 7 {
-		groups = parseSlots(reply, addr)
-	} else {
-		groups = parseShards(reply, addr, c.opt.TLSConfig != nil)
-	}
-
+	groups := result.parse(c.opt.TLSConfig != nil)
 	conns := make(map[string]conn, len(groups))
 	for _, g := range groups {
 		for _, addr := range g.nodes {
@@ -275,35 +262,33 @@ type group struct {
 	slots [][2]int64
 }
 
+func parseEndpoint(fallback, endpoint string, port int64) string {
+	switch endpoint {
+	case "":
+		endpoint, _, _ = net.SplitHostPort(fallback)
+	case "?":
+		return ""
+	}
+	return net.JoinHostPort(endpoint, strconv.FormatInt(port, 10))
+}
+
 // parseSlots - map redis slots for each redis nodes/addresses
 // defaultAddr is needed in case the node does not know its own IP
 func parseSlots(slots RedisMessage, defaultAddr string) map[string]group {
 	groups := make(map[string]group, len(slots.values))
 	for _, v := range slots.values {
-		var master string
-		switch v.values[2].values[0].string {
-		case "":
-			master = defaultAddr
-		case "?":
+		master := parseEndpoint(defaultAddr, v.values[2].values[0].string, v.values[2].values[1].integer)
+		if master == "" {
 			continue
-		default:
-			master = net.JoinHostPort(v.values[2].values[0].string, strconv.FormatInt(v.values[2].values[1].integer, 10))
 		}
 		g, ok := groups[master]
 		if !ok {
 			g.slots = make([][2]int64, 0)
 			g.nodes = make([]string, 0, len(v.values)-2)
 			for i := 2; i < len(v.values); i++ {
-				var dst string
-				switch v.values[i].values[0].string {
-				case "":
-					dst = defaultAddr
-				case "?":
-					continue
-				default:
-					dst = net.JoinHostPort(v.values[i].values[0].string, strconv.FormatInt(v.values[i].values[1].integer, 10))
+				if dst := parseEndpoint(defaultAddr, v.values[i].values[0].string, v.values[i].values[1].integer); dst != "" {
+					g.nodes = append(g.nodes, dst)
 				}
-				g.nodes = append(g.nodes, dst)
 			}
 		}
 		g.slots = append(g.slots, [2]int64{v.values[0].integer, v.values[1].integer})
@@ -315,70 +300,37 @@ func parseSlots(slots RedisMessage, defaultAddr string) map[string]group {
 // parseShards - map redis shards for each redis nodes/addresses
 // defaultAddr is needed in case the node does not know its own IP
 func parseShards(shards RedisMessage, defaultAddr string, tls bool) map[string]group {
-	parseNodeEndpoint := func(msg map[string]RedisMessage) string {
-		endpoint := msg["endpoint"].string
-		switch endpoint {
-		case "":
-			return defaultAddr
-		case "?":
-			return ""
-		}
-
-		port := msg["port"].integer
-		if tls && msg["tls-port"].integer > 0 {
-			port = msg["tls-port"].integer
-		}
-
-		return net.JoinHostPort(endpoint, strconv.FormatInt(port, 10))
-	}
-
 	groups := make(map[string]group, len(shards.values))
 	for _, v := range shards.values {
-		slotsAndNodes, _ := v.ToMap()
-		var (
-			master    string
-			masterPos int
-		)
-		nodes := slotsAndNodes["nodes"].values
-		for i := 0; i < len(nodes); i++ {
-			dict, _ := nodes[i].ToMap()
-			if dict["role"].string != "master" {
-				continue
+		m := -1
+		shard, _ := v.ToMap()
+		slots := shard["slots"].values
+		nodes := shard["nodes"].values
+		g := group{
+			nodes: make([]string, 0, len(nodes)),
+			slots: make([][2]int64, len(slots)/2),
+		}
+		for i := range g.slots {
+			g.slots[i][0], _ = slots[i*2].AsInt64()
+			g.slots[i][1], _ = slots[i*2+1].AsInt64()
+		}
+		for _, n := range nodes {
+			dict, _ := n.ToMap()
+			port := dict["port"].integer
+			if tls && dict["tls-port"].integer > 0 {
+				port = dict["tls-port"].integer
 			}
-			master = parseNodeEndpoint(dict)
-			masterPos = i
-			break
-		}
-
-		if master == "" {
-			continue
-		}
-
-		g, ok := groups[master]
-		if !ok {
-			g.slots = make([][2]int64, 0)
-			g.nodes = make([]string, 0, len(nodes))
-			g.nodes = append(g.nodes, master)
-			for i := 0; i < len(nodes); i++ {
-				if i == masterPos {
-					continue
-				}
-				dict, _ := nodes[i].ToMap()
-				dst := parseNodeEndpoint(dict)
-				if dst == "" {
-					continue
+			if dst := parseEndpoint(defaultAddr, dict["endpoint"].string, port); dst != "" {
+				if dict["role"].string == "master" {
+					m = len(g.nodes)
 				}
 				g.nodes = append(g.nodes, dst)
 			}
 		}
-		slots := slotsAndNodes["slots"]
-		arr, _ := slots.ToArray()
-		for i := 0; i+1 < len(arr); i += 2 {
-			start, _ := arr[i].AsInt64()
-			end, _ := arr[i+1].AsInt64()
-			g.slots = append(g.slots, [2]int64{start, end})
+		if m >= 0 {
+			g.nodes[0], g.nodes[m] = g.nodes[m], g.nodes[0]
+			groups[g.nodes[0]] = g
 		}
-		groups[master] = g
 	}
 	return groups
 }

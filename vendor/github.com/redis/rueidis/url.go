@@ -14,24 +14,13 @@ import (
 // https://github.com/redis/redis-specifications/blob/master/uri/redis.txt
 // Example:
 //
-//	redis://<user>:<password>@<host>:<port>/<db_number>
-//	unix://<user>:<password>@</path/to/redis.sock>?db=<db_number>
+// redis://<user>:<password>@<host>:<port>/<db_number>
+// redis://<user>:<password>@<host>:<port>?addr=<host2>:<port2>&addr=<host3>:<port3>
+// unix://<user>:<password>@</path/to/redis.sock>?db=<db_number>
 func ParseURL(str string) (opt ClientOption, err error) {
 	u, _ := url.Parse(str)
-	switch u.Scheme {
-	case "unix":
-		opt.DialFn = func(s string, dialer *net.Dialer, config *tls.Config) (conn net.Conn, err error) {
-			return dialer.Dial("unix", s)
-		}
-		opt.InitAddress = []string{strings.TrimSpace(u.Path)}
-	case "rediss":
-		opt.TLSConfig = &tls.Config{}
-	case "redis":
-	default:
-		return opt, fmt.Errorf("redis: invalid URL scheme: %s", u.Scheme)
-	}
-	if opt.InitAddress == nil {
-		host, port, _ := net.SplitHostPort(u.Host)
+	parseAddr := func(hostport string) (host string, addr string) {
+		host, port, _ := net.SplitHostPort(hostport)
 		if host == "" {
 			host = u.Host
 		}
@@ -41,7 +30,28 @@ func ParseURL(str string) (opt ClientOption, err error) {
 		if port == "" {
 			port = "6379"
 		}
-		opt.InitAddress = []string{net.JoinHostPort(host, port)}
+		return host, net.JoinHostPort(host, port)
+	}
+	switch u.Scheme {
+	case "unix":
+		opt.DialFn = func(s string, dialer *net.Dialer, config *tls.Config) (conn net.Conn, err error) {
+			return dialer.Dial("unix", s)
+		}
+		opt.InitAddress = []string{strings.TrimSpace(u.Path)}
+	case "rediss":
+		opt.TLSConfig = &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		}
+	case "redis":
+	default:
+		return opt, fmt.Errorf("redis: invalid URL scheme: %s", u.Scheme)
+	}
+	if opt.InitAddress == nil {
+		host, addr := parseAddr(u.Host)
+		opt.InitAddress = []string{addr}
+		if opt.TLSConfig != nil {
+			opt.TLSConfig.ServerName = host
+		}
 	}
 	if u.User != nil {
 		opt.Username = u.User.Username()
@@ -70,7 +80,12 @@ func ParseURL(str string) (opt ClientOption, err error) {
 			return opt, fmt.Errorf("redis: invalid write timeout: %q", q.Get("write_timeout"))
 		}
 	}
+	for _, addr := range q["addr"] {
+		_, addr = parseAddr(addr)
+		opt.InitAddress = append(opt.InitAddress, addr)
+	}
 	opt.AlwaysRESP2 = q.Get("protocol") == "2"
+	opt.DisableCache = q.Get("client_cache") == "0"
 	opt.DisableRetry = q.Get("max_retries") == "0"
 	opt.ClientName = q.Get("client_name")
 	opt.Sentinel.MasterSet = q.Get("master_set")

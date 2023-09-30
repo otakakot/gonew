@@ -5,11 +5,10 @@ import (
 	"os"
 	"testing"
 
-	"github.com/otakakot/gonew/internal/cache"
 	"github.com/otakakot/gonew/internal/database"
 )
 
-func TestIntegration(t *testing.T) {
+func TestPostgres(t *testing.T) {
 	t.Parallel()
 
 	t.Run("postgres", func(t *testing.T) {
@@ -34,29 +33,6 @@ func TestIntegration(t *testing.T) {
 
 		if err := cli.Ping(context.Background()); err != nil {
 			t.Errorf("failed to ping database: %v", err)
-		}
-	})
-
-	t.Run("redis", func(t *testing.T) {
-		t.Parallel()
-
-		addr := os.Getenv("REDIS_URL")
-
-		if addr == "" {
-			addr = "localhost:6379"
-		}
-
-		cli, err := cache.New(addr)
-		if err != nil {
-			t.Fatalf("failed to create redis client: %v", err)
-		}
-
-		t.Cleanup(func() {
-			cli.Close()
-		})
-
-		if err := cli.Ping(context.Background()); err != nil {
-			t.Errorf("failed to ping redis: %v", err)
 		}
 	})
 }

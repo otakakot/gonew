@@ -10,10 +10,10 @@ import (
 	"testing"
 )
 
-func TestE2E(t *testing.T) {
+func TestAPI(t *testing.T) {
 	t.Parallel()
 
-	endpoint := os.Getenv("ENDPOINT")
+	endpoint := os.Getenv("API_ENDPOINT")
 
 	if endpoint == "" {
 		endpoint = "http://localhost:8080"

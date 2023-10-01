@@ -1,0 +1,27 @@
+name: unit
+run-name: ${{ github.ref_name }} by @${{ github.actor }} ${{ github.workflow }}
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+on:
+  pull_request:
+    paths:
+      - .github/workflows/test.unit.yaml
+      - "**/*.go"
+      - go.mod
+      - go.sum
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Setup go
+        uses: actions/setup-go@v4
+        with:
+          go-version-file: go.mod
+      - name: Test unit
+        env:
+          APP_ENDPOINT: http://localhost:7070
+          API_ENDPOINT: http://localhost:8080
+        run: go test ./internal/...

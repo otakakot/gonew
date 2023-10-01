@@ -65,5 +65,5 @@ jobs:
       - name: Shutdown
         if: always()
         run: |
-          kill ${{ steps.app.outputs.API_PID }}
-          kill ${{ steps.api.outputs.APP_PID }}
+          kill ${{ steps.app.outputs.APP_PID }}
+          kill ${{ steps.api.outputs.API_PID }}

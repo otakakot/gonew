@@ -1,0 +1,69 @@
+name: e2e test
+run-name: ${{ github.ref_name }} by @${{ github.actor }} ${{ github.workflow }}
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+on:
+  pull_request:
+    paths:
+      - .github/workflows/test.e2e.yaml
+      - "**/*.go"
+      - go.mod
+      - go.sum
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    services:
+      postgres:
+        image: postgres:15.4-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7.0.12-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Setup go
+        uses: actions/setup-go@v4
+        with:
+          go-version-file: go.mod
+      - name: Run app
+        id: app
+        env:
+          PORT: "7070"
+          REDIS_URL: localhost:6379
+          POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+        run: |
+          go run cmd/app/main.go &
+          echo APP_CORE_PID=$! >> $GITHUB_OUTPUT
+          sleep 20
+      - name: Run api
+        id: api
+        env:
+          PORT: "8080"
+          REDIS_URL: localhost:6379
+          POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+        run: |
+          go run cmd/api/main.go &
+          echo APP_API_PID=$! >> $GITHUB_OUTPUT
+          sleep 20
+      - name: Test e2e
+        env:
+          APP_ENDPOINT: http://localhost:7070
+          API_ENDPOINT: http://localhost:8080
+        run: go test ./test/e2e/...
+      - name: Shutdown
+        if: always()
+        run: |
+          kill ${{ steps.app.outputs.APP_PID }}
+          kill ${{ steps.api.outputs.APP_PID }}

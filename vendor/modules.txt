@@ -18,7 +18,7 @@ github.com/jackc/pgx/v5/pgconn/internal/ctxwatch
 github.com/jackc/pgx/v5/pgproto3
 github.com/jackc/pgx/v5/pgtype
 github.com/jackc/pgx/v5/stdlib
-# github.com/redis/rueidis v1.0.19
+# github.com/redis/rueidis v1.0.20
 ## explicit; go 1.20
 github.com/redis/rueidis
 github.com/redis/rueidis/internal/cmds
@@ -26,7 +26,7 @@ github.com/redis/rueidis/internal/util
 # golang.org/x/crypto v0.9.0
 ## explicit; go 1.17
 golang.org/x/crypto/pbkdf2
-# golang.org/x/text v0.11.0
+# golang.org/x/text v0.13.0
 ## explicit; go 1.17
 golang.org/x/text/cases
 golang.org/x/text/internal

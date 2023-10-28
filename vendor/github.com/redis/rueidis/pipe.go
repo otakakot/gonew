@@ -20,7 +20,7 @@ import (
 )
 
 const LIB_NAME = "rueidis"
-const LIB_VER = "1.0.19"
+const LIB_VER = "1.0.20"
 
 var noHello = regexp.MustCompile("unknown command .?(HELLO|hello).?")
 
@@ -332,16 +332,16 @@ func (p *pipe) _background() {
 		atomic.CompareAndSwapInt32(&p.state, 2, 3) // make write goroutine to exit
 		atomic.AddInt32(&p.waits, 1)
 		go func() {
-			<-p.queue.PutOne(cmds.QuitCmd)
+			<-p.queue.PutOne(cmds.PingCmd)
 			atomic.AddInt32(&p.waits, -1)
 		}()
 	}
-
+	err := p.Error()
 	p.nsubs.Close()
 	p.psubs.Close()
 	p.ssubs.Close()
 	if old := p.pshks.Swap(emptypshks).(*pshks); old.close != nil {
-		old.close <- p.Error()
+		old.close <- err
 		close(old.close)
 	}
 
@@ -358,6 +358,8 @@ func (p *pipe) _background() {
 	if p.onInvalidations != nil {
 		p.onInvalidations(nil)
 	}
+
+	resp := newErrResult(err)
 	for atomic.LoadInt32(&p.waits) != 0 {
 		select {
 		case <-p.close:
@@ -365,11 +367,10 @@ func (p *pipe) _background() {
 		default:
 		}
 		if _, _, ch, resps, cond = p.queue.NextResultCh(); ch != nil {
-			err := newErrResult(p.Error())
 			for i := range resps {
-				resps[i] = err
+				resps[i] = resp
 			}
-			ch <- err
+			ch <- resp
 			cond.L.Unlock()
 			cond.Signal()
 		} else {
@@ -409,7 +410,14 @@ func (p *pipe) _backgroundWrite() (err error) {
 					runtime.Gosched()
 					continue
 				}
-				if flushDelay != 0 && atomic.LoadInt32(&p.waits) > 1 { // do not delay for sequential usage
+				// Blocking commands are executed in dedicated client which is aquired from pool.
+				// So, there is no sense to wait other commands to be written.
+				// https://github.com/redis/rueidis/issues/379
+				blocked := ones[0].IsBlock()
+				for i := 0; i < len(multi) && !blocked; i++ {
+					blocked = blocked || multi[i].IsBlock()
+				}
+				if flushDelay != 0 && !blocked && atomic.LoadInt32(&p.waits) > 1 { // do not delay for sequential usage
 					time.Sleep(flushDelay - time.Since(flushStart)) // ref: https://github.com/redis/rueidis/issues/156
 				}
 			}
@@ -421,7 +429,7 @@ func (p *pipe) _backgroundWrite() (err error) {
 			err = writeCmd(p.w, cmd.Commands())
 		}
 		if err != nil {
-			if err != ErrClosing { // ignore ErrClosing to allow final QUIT command to be sent
+			if err != ErrClosing { // ignore ErrClosing to allow final PING command to be sent
 				return
 			}
 			runtime.Gosched()
@@ -1304,7 +1312,7 @@ func (p *pipe) Close() {
 			p.background()
 		}
 		if block == 1 && (stopping1 || stopping2) { // make sure there is no block cmd
-			<-p.queue.PutOne(cmds.QuitCmd)
+			<-p.queue.PutOne(cmds.PingCmd)
 		}
 	}
 	atomic.AddInt32(&p.waits, -1)

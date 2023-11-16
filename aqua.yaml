@@ -12,4 +12,4 @@ registries:
 packages:
 - name: golangci/golangci-lint@v1.55.2
 - name: google/yamlfmt@v0.10.0
-- name: google/ko@v0.15.0
+- name: google/ko@v0.15.1

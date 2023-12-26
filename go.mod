@@ -3,7 +3,7 @@ module github.com/otakakot/gonew
 go 1.21.2
 
 require (
-	github.com/jackc/pgx/v5 v5.5.0
+	github.com/jackc/pgx/v5 v5.5.1
 	github.com/redis/rueidis v1.0.21
 )
 

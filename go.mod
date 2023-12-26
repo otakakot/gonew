@@ -1,6 +1,6 @@
 module github.com/otakakot/gonew
 
-go 1.21.2
+go 1.21.5
 
 require (
 	github.com/jackc/pgx/v5 v5.5.0

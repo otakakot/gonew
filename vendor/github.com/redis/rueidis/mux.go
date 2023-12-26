@@ -67,13 +67,13 @@ var _ conn = (*mux)(nil)
 type mux struct {
 	init   wire
 	dead   wire
+	clhks  atomic.Value
 	pool   *pool
 	wireFn wireFn
 	dst    string
 	wire   []atomic.Value
 	sc     []*singleconnect
 	mu     []sync.Mutex
-	clhks  atomic.Value
 	maxp   int
 }
 
@@ -117,7 +117,7 @@ func (m *mux) SetOnCloseHook(fn func(error)) {
 }
 
 func (m *mux) setCloseHookOnWire(i uint16, w wire) {
-	if w != m.dead {
+	if w != m.dead && w != m.init {
 		w.SetOnCloseHook(func(err error) {
 			if err != ErrClosing {
 				if m.wire[i].CompareAndSwap(w, m.init) {

@@ -4,7 +4,7 @@ go 1.21.6
 
 require (
 	github.com/jackc/pgx/v5 v5.5.2
-	github.com/redis/rueidis v1.0.25
+	github.com/redis/rueidis v1.0.27
 )
 
 require (

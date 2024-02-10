@@ -74,6 +74,7 @@ type clusterClient struct {
 	pslots [16384]conn
 	rslots []conn
 	opt    *ClientOption
+	rOpt   *ClientOption
 	conns  map[string]connrole
 	connFn connFn
 	sc     call
@@ -93,8 +94,8 @@ type connrole struct {
 func newClusterClient(opt *ClientOption, connFn connFn) (client *clusterClient, err error) {
 	client = &clusterClient{
 		cmd:    cmds.NewBuilder(cmds.InitSlot),
-		opt:    opt,
 		connFn: connFn,
+		opt:    opt,
 		conns:  make(map[string]connrole),
 		retry:  !opt.DisableRetry,
 		aws:    len(opt.InitAddress) == 1 && strings.Contains(opt.InitAddress[0], "amazonaws.com"),
@@ -102,6 +103,12 @@ func newClusterClient(opt *ClientOption, connFn connFn) (client *clusterClient, 
 
 	if opt.ReplicaOnly && opt.SendToReplicas != nil {
 		return nil, ErrReplicaOnlyConflict
+	}
+
+	if opt.SendToReplicas != nil {
+		rOpt := *opt
+		rOpt.ReplicaOnly = true
+		client.rOpt = &rOpt
 	}
 
 	client.connFn = func(dst string, opt *ClientOption) conn {
@@ -225,7 +232,11 @@ func (c *clusterClient) _refresh() (err error) {
 	for master, g := range groups {
 		conns[master] = connrole{conn: c.connFn(master, c.opt), replica: false}
 		for _, addr := range g.nodes[1:] {
-			conns[addr] = connrole{conn: c.connFn(addr, c.opt), replica: true}
+			if c.rOpt != nil {
+				conns[addr] = connrole{conn: c.connFn(addr, c.rOpt), replica: true}
+			} else {
+				conns[addr] = connrole{conn: c.connFn(addr, c.opt), replica: true}
+			}
 		}
 	}
 	// make sure InitAddress always be present
@@ -241,7 +252,8 @@ func (c *clusterClient) _refresh() (err error) {
 
 	c.mu.RLock()
 	for addr, cc := range c.conns {
-		if fresh, ok := conns[addr]; ok {
+		fresh, ok := conns[addr]
+		if ok && (cc.replica == fresh.replica || c.rOpt == nil) {
 			conns[addr] = connrole{
 				conn:    cc.conn,
 				replica: fresh.replica,
@@ -263,7 +275,7 @@ func (c *clusterClient) _refresh() (err error) {
 					pslots[i] = conns[g.nodes[1+rand.Intn(nodesCount-1)]].conn
 				}
 			}
-		case c.opt.SendToReplicas != nil:
+		case c.rOpt != nil: // implies c.opt.SendToReplicas != nil
 			if len(rslots) == 0 { // lazy init
 				rslots = make([]conn, 16384)
 			}
